@@ -24,7 +24,7 @@ import {
   SecretRedactor,
   setGuardDirectory,
   type DlpGuardConfig,
-} from "./core.js"
+} from "./core.ts"
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
