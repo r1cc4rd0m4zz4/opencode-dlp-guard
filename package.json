@@ -1,0 +1,53 @@
+{
+  "name": "opencode-dlp-guard",
+  "version": "0.1.0",
+  "description": "Zero-dependency DLP, path protection and secret redaction guard for OpenCode V2",
+  "type": "module",
+  "license": "MIT",
+  "author": "r1cc4rd0m4zz4",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/r1cc4rd0m4zz4/opencode-dlp-guard.git"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "dlp",
+    "data-loss-prevention",
+    "security",
+    "secret-detection",
+    "redaction",
+    "guardrails",
+    "zero-trust",
+    "ai-agents",
+    "developer-tools",
+    "typescript",
+    "gitleaks",
+    "path-protection"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./core": "./src/core.ts"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/core.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm test && pnpm typecheck"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
