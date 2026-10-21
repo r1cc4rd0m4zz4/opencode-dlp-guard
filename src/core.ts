@@ -14,6 +14,7 @@ import * as cp from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 export interface DlpGuardConfig {
   /** Blocked for read and write. */
@@ -36,6 +37,12 @@ export const DEFAULT_CONFIG: DlpGuardConfig = {
     "~/.gnupg/**",
     "~/.kube/**",
     "~/.netrc",
+    "~/.npmrc",
+    "~/.pypirc",
+    "~/.docker/config.json",
+    "~/.config/gh/hosts.yml",
+    "~/.azure/**",
+    "~/.gcloud/**",
     "~/.zshrc*",
     "~/.bashrc*",
     "~/.bash_profile",
@@ -49,6 +56,8 @@ export const DEFAULT_CONFIG: DlpGuardConfig = {
     "~/.config/opencode/auth.json",
     "~/.local/share/opencode/opencode.db",
     "~/.local/share/opencode/opencode.db-*",
+    "/etc/shadow",
+    "/etc/sudoers*",
   ],
   integrityPaths: ["~/.config/opencode/**", "~/.local/share/opencode/**"],
   enableGitleaks: true,
@@ -121,17 +130,21 @@ export function ensureConfigFile(file: string = configFilePath(), config: DlpGua
 const RULES: { category: string; rx: RegExp }[] = [
   {
     category: "PRIVATE_KEY",
-    rx: /(-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/g,
+    rx: /(-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----)/g,
   },
   { category: "AWS_KEY", rx: /\b((?:AKIA|ASIA)[0-9A-Z]{16})\b/g },
   { category: "GITHUB_TOKEN", rx: /\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})(?![\w])/g },
+  { category: "GITLAB_TOKEN", rx: /\b(glpat-[0-9a-zA-Z\-_]{20,})\b/g },
+  { category: "HUGGINGFACE_TOKEN", rx: /\b(hf_[A-Za-z0-9]{34,})\b/g },
+  { category: "NPM_TOKEN", rx: /\b(npm_[A-Za-z0-9]{36})\b/g },
+  { category: "PYPI_TOKEN", rx: /\b(pypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,})\b/g },
   { category: "SLACK_TOKEN", rx: /\b(xox[baprs]-[0-9a-zA-Z-]{10,48})\b/g },
   {
     category: "API_KEY",
-    rx: /\b(sk-ant-[\w-]{20,}|sk-proj-[\w-]{20,}|sk-[A-Za-z0-9]{32,}|AIza[\w-]{35}|[rs]k_live_[0-9A-Za-z]{24,})(?![\w-])/g,
+    rx: /\b(sk-(?:ant|proj|svcacct|admin)-[\w-]{20,}|sk-[A-Za-z0-9]{32,}|AIza[\w-]{35}|[rs]k_live_[0-9A-Za-z]{24,})(?![\w-])/g,
   },
   { category: "JWT", rx: /\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/g },
-  { category: "URL_CREDENTIAL", rx: /:\/\/[^\s:/@]+:([^\s@/]+)@/g },
+  { category: "URL_CREDENTIAL", rx: /:\/\/(?:[^\s:/@]*:)?([^\s@/]{3,})@/g },
   {
     // NAME=value / NAME: value / "name": "value", where a NAME segment is a secret word.
     category: "SECRET",
@@ -139,6 +152,17 @@ const RULES: { category: string; rx: RegExp }[] = [
   },
   { category: "BEARER", rx: /\bBearer\s+([A-Za-z0-9._~+/=-]{20,})/g },
 ]
+
+function isSafeOrPlaceholder(secret: string, quoteType?: "double" | "single" | "none"): boolean {
+  if (!secret) return true
+  if (/^\[REDACTED_[A-Z_]+_#\d+\]$/.test(secret)) return true
+  if (/^(?:<[A-Za-z0-9_ -]+>|\([A-Za-z0-9_ -]+\)|\[[A-Za-z0-9_ -]+\])$/.test(secret)) return true
+  // Single-quoted strings in shell/JSON are literal values, not variable expansions
+  if (quoteType === "single") return false
+  // For unquoted or double-quoted, preserve uppercase shell variables like $VAR, ${VAR}
+  if (/^\$\{?[A-Z][A-Z0-9_]*\}?$/.test(secret)) return true
+  return false
+}
 
 /** The same secret always maps to the same token within one session. */
 export class SecretRedactor {
@@ -170,21 +194,63 @@ export class SecretRedactor {
     return token
   }
 
+  private replaceKnown(text: string): string {
+    if (this.secretToToken.size === 0) return text
+    let out = text
+    const sorted = [...this.secretToToken.keys()].sort((a, b) => b.length - a.length)
+    for (const secret of sorted) {
+      if (out.includes(secret)) {
+        out = out.split(secret).join(this.secretToToken.get(secret)!)
+      }
+    }
+    return out
+  }
+
   /** Replaces secrets with stable tokens. gitleaks (optional) only runs on large inputs. */
   redact(text: string, useGitleaks = false): string {
     if (typeof text !== "string" || !text) return text
-    let out = text
+    // 1. Session memory: redact previously discovered secrets everywhere they reappear
+    let out = this.replaceKnown(text)
+
+    // 2. Scan with deterministic regex rules
     for (const { category, rx } of RULES) {
-      out = out.replace(rx, (match: string, ...groups: unknown[]) => {
-        const secret = groups.slice(0, 3).find((group) => typeof group === "string" && group) as string | undefined
-        if (!secret || /^(?:\[REDACTED_|[$<{(])/.test(secret)) return match
+      out = out.replace(rx, (match: string, ...args: unknown[]) => {
+        const offsetIndex = args.findIndex((a) => typeof a === "number")
+        const groups = (offsetIndex >= 0 ? args.slice(0, offsetIndex) : args.slice(0, -2)) as (string | undefined)[]
+        let secret: string | undefined = undefined
+        let quoteType: "double" | "single" | "none" | undefined = undefined
+
+        if (category === "SECRET") {
+          if (groups[0]) {
+            secret = groups[0]
+            quoteType = "double"
+          } else if (groups[1]) {
+            secret = groups[1]
+            quoteType = "single"
+          } else if (groups[2]) {
+            secret = groups[2]
+            quoteType = "none"
+          }
+        } else {
+          secret = groups.find((group): group is string => typeof group === "string" && group.length > 0)
+        }
+
+        if (!secret || isSafeOrPlaceholder(secret, quoteType)) return match
         const index = match.lastIndexOf(secret)
-        return match.slice(0, index) + this.tokenFor(secret, category) + match.slice(index + secret.length)
+        const token = this.tokenFor(secret, category)
+        return match.slice(0, index) + token + match.slice(index + secret.length)
       })
     }
+
+    // 3. Re-apply session memory for secrets discovered during this turn
+    out = this.replaceKnown(out)
+
+    // 4. Gitleaks safety-net for large buffers
     if (useGitleaks && this.config.enableGitleaks && out.length >= this.config.gitleaksMinBytes) {
       for (const secret of scanWithGitleaks(out, this.config.gitleaksTimeoutMs)) {
-        out = out.split(secret).join(this.tokenFor(secret, "SECRET"))
+        if (!isSafeOrPlaceholder(secret)) {
+          out = out.split(secret).join(this.tokenFor(secret, "SECRET"))
+        }
       }
     }
     return out
@@ -250,7 +316,8 @@ function globToRegExp(glob: string): RegExp {
 function matches(pattern: string, abs: string, cwd: string): boolean {
   let glob = expandHome(pattern.replace(/\\/g, "/"))
   if (!glob.includes("/")) return globToRegExp(glob).test(path.basename(abs))
-  if (!glob.startsWith("/") && !glob.startsWith("**")) glob = `${cwd.replace(/\\/g, "/")}/${glob}`
+  const isAbs = glob.startsWith("/") || /^[A-Za-z]:\//.test(glob)
+  if (!isAbs && !glob.startsWith("**")) glob = `${cwd.replace(/\\/g, "/")}/${glob}`
   if (globToRegExp(glob).test(abs)) return true
   if (glob.endsWith("/**") && globToRegExp(glob.slice(0, -3)).test(abs)) return true
 
@@ -334,6 +401,29 @@ interface Segment {
 
 /** Splits on ; && || | & and newlines outside quotes. Redirect targets are collected apart. */
 function parseSegments(command: string): Segment[] {
+  // Pre-normalize $IFS outside quotes: in shell, $IFS acts as a whitespace separator
+  let normalized = ""
+  let inQ = ""
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]
+    if (inQ) {
+      if (c === inQ) inQ = ""
+      else if (c === "\\" && inQ === '"' && i + 1 < command.length) {
+        normalized += c + command[++i]
+        continue
+      }
+      normalized += c
+    } else if (c === "'" || c === '"') {
+      inQ = c
+      normalized += c
+    } else if (command.startsWith("$IFS", i)) {
+      normalized += " "
+      i += 3
+    } else {
+      normalized += c
+    }
+  }
+
   const segments: Segment[] = []
   let segment: Segment = { words: [], redirects: [] }
   let word = ""
@@ -354,29 +444,44 @@ function parseSegments(command: string): Segment[] {
     segment = { words: [], redirects: [] }
   }
 
-  for (let i = 0; i < command.length; i++) {
-    const char = command[i]
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized[i]
     if (quote) {
       if (char === quote) quote = ""
-      else if (char === "\\" && quote === '"' && i + 1 < command.length) word += command[++i]
+      else if (char === "\\" && quote === '"' && i + 1 < normalized.length) word += normalized[++i]
       else word += char
     } else if (char === "'" || char === '"') {
       quote = char
       inWord = true
-    } else if (char === "\\" && i + 1 < command.length) {
-      word += command[++i]
+    } else if (char === "\\" && i + 1 < normalized.length) {
+      word += normalized[++i]
       inWord = true
-    } else if (char === ";" || char === "\n" || char === "|") {
+    } else if (char === ";" || char === "\n") {
       endSegment()
-    } else if (char === "&" && command[i - 1] !== ">" && command[i + 1] !== ">") {
+    } else if (char === "|" && normalized[i + 1] === "|") {
+      endSegment()
+      i++
+    } else if (char === "|" && !redirect) {
+      endSegment()
+    } else if (char === "&" && normalized[i + 1] === "&") {
+      endSegment()
+      i++
+    } else if (char === "&" && normalized[i + 1] === ">") {
+      endWord()
+      i++
+      redirect = true
+    } else if (char === "&") {
       endSegment()
     } else if (char === ">") {
       endWord()
-      if (command[i + 1] === ">") i++
+      if (normalized[i + 1] === ">" || normalized[i + 1] === "|") i++
       redirect = true
     } else if (char === "<") {
       endWord() // input redirection is a read: not checked here
-      if (command[i + 1] === "<") i++
+      if (normalized[i + 1] === "<") i++
+    } else if (char === "(" || char === ")") {
+      // Subshell parenthesis acts as segment boundary
+      endSegment()
     } else if (/\s/.test(char)) {
       endWord()
     } else {
@@ -443,12 +548,43 @@ export function checkBashCommand(
   })
   let here = cwd
 
-  // Nested code: $(...), `...`, sh -c "...", eval "..."
-  const nested = [...command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)].map((match) => match[1] ?? match[2])
+  // Nested code: $(...), `...`, (...), sh -c "...", eval "..."
+  const nested: string[] = []
+  for (const match of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) {
+    const inner = match[1] ?? match[2]
+    if (inner && inner.trim()) nested.push(inner)
+  }
+  for (const match of command.matchAll(/\(([^()]+)\)/g)) {
+    const inner = match[1]?.trim()
+    if (inner && !nested.includes(inner)) nested.push(inner)
+  }
 
   for (const { words, redirects } of parseSegments(command)) {
     let i = 0
-    while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || WRAPPERS.has(path.basename(words[i])))) i++
+    while (i < words.length) {
+      const w = words[i]
+      if (/^[A-Za-z_]\w*=/.test(w)) {
+        i++
+        continue
+      }
+      const base = path.basename(w)
+      if (WRAPPERS.has(base)) {
+        i++
+        while (i < words.length && words[i].startsWith("-")) {
+          const opt = words[i]
+          i++
+          if (
+            ["-u", "-g", "-n", "-C", "--user", "--group"].includes(opt) &&
+            i < words.length &&
+            !words[i].startsWith("-")
+          ) {
+            i++
+          }
+        }
+        continue
+      }
+      break
+    }
     const name = path.basename(words[i] ?? "")
     const args = words.slice(i + 1)
 
@@ -467,6 +603,34 @@ export function checkBashCommand(
     if (name === "dd") {
       targets = [...targets, ...args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3))]
     }
+    if (name === "curl") {
+      for (let j = 0; j < args.length; j++) {
+        if ((args[j] === "-o" || args[j] === "--output") && args[j + 1]) {
+          targets.push(args[j + 1])
+        }
+      }
+    }
+    if (name === "wget") {
+      for (let j = 0; j < args.length; j++) {
+        if ((args[j] === "-O" || args[j] === "--output-document") && args[j + 1]) {
+          targets.push(args[j + 1])
+        }
+      }
+    }
+    if (name === "find" && args.includes("-delete")) {
+      for (const arg of args) {
+        if (!arg.startsWith("-") && arg !== ".") targets.push(arg)
+      }
+    }
+    if (name === "git") {
+      const sub = args[0]
+      if (sub === "checkout" || sub === "restore" || sub === "clean") {
+        for (const arg of args.slice(1)) {
+          if (!arg.startsWith("-") && arg !== "--") targets.push(arg)
+        }
+      }
+    }
+
     for (const target of targets) {
       const check = isPathProtected(target, config, here, "write")
       if (check.protected) return deny(target, check.reason)
@@ -485,12 +649,29 @@ export function checkBashCommand(
 // -----------------------------------------------------------------------------
 
 const SHELL_TOOL = /^(?:shell|bash|sh|exec|run_command|terminal)$/i
-const WRITE_TOOL = /write|edit|replace|patch|create|delete|move|rename|apply|upload|install/i
+const WRITE_TOOL =
+  /write|edit|replace|patch|create|delete|remove|destroy|unlink|move|rename|apply|upload|install|save|put|store|append|touch|truncate/i
 const PATH_KEY =
-  /^(?:path|paths|file|files|filepath|file_path|filename|directory|dir|cwd|workdir|root|target|destination|dest)$/i
+  /^(?:path|paths|file|files|filepath|file_path|filename|directory|dir|folder|cwd|workdir|root|target|destination|dest|source|src|from|to|uri|url|old_?path|new_?path|source_?path|target_?path|dest_?path)$/i
+
+function extractFilePath(raw: string): string | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined
+  let val = raw.trim()
+  if (val.startsWith("file://")) {
+    try {
+      val = fileURLToPath(val)
+    } catch {
+      val = val.slice(7)
+    }
+  } else if (val.includes("://")) {
+    // Web / remote protocol (http, https, ftp, etc.): not a local path
+    return undefined
+  }
+  return val
+}
 
 function collectPaths(value: unknown, out: string[], depth = 0): void {
-  if (depth > 5 || !value || typeof value !== "object") return
+  if (depth > 6 || !value || typeof value !== "object") return
   if (Array.isArray(value)) {
     for (const item of value) collectPaths(item, out, depth + 1)
     return
@@ -499,7 +680,10 @@ function collectPaths(value: unknown, out: string[], depth = 0): void {
     if (PATH_KEY.test(key)) {
       const values = Array.isArray(item) ? item : [item]
       for (const entry of values) {
-        if (typeof entry === "string" && entry.trim() && !entry.includes("://")) out.push(entry)
+        if (typeof entry === "string") {
+          const p = extractFilePath(entry)
+          if (p) out.push(p)
+        }
       }
     } else if (item && typeof item === "object") {
       collectPaths(item, out, depth + 1)

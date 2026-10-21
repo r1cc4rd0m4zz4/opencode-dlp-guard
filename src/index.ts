@@ -89,8 +89,31 @@ export default Plugin.define({
 
       if (event.status === "error") {
         try {
-          const next = redactor.redact(event.error.message)
-          if (next !== event.error.message) event.error.message = next
+          const err = event.error as unknown as Record<string, unknown>
+          if (typeof err.message === "string") {
+            const next = redactor.redact(err.message)
+            if (next !== err.message) {
+              try {
+                err.message = next
+              } catch {
+                event.error = Object.create(Object.getPrototypeOf(err), {
+                  ...Object.getOwnPropertyDescriptors(err),
+                  message: { value: next, writable: true, enumerable: true, configurable: true },
+                })
+              }
+            }
+          }
+          if (err.metadata && typeof err.metadata === "object") {
+            const metaStr = JSON.stringify(err.metadata)
+            const redactedMeta = redactor.redact(metaStr)
+            if (redactedMeta !== metaStr) {
+              try {
+                err.metadata = JSON.parse(redactedMeta)
+              } catch {
+                // keep original if parse fails
+              }
+            }
+          }
         } catch {
           // best effort: never break the session on a redaction failure
         }

