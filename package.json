@@ -32,6 +32,7 @@
   "types": "./src/index.ts",
   "files": [
     "src",
+    "AGENTS.md",
     "README.md",
     "LICENSE"
   ],

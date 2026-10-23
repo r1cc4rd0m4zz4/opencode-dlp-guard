@@ -65,19 +65,21 @@ Intercetta ogni chiamata a qualsiasi tool (inclusi server MCP e comandi di patch
 
 Riconosce automaticamente sia percorsi relativi che assoluti, parametri URI `file://`, parametri complessi (`path`, `filePath`, `source`, `destination`, `oldPath`, `newPath`, `from`, `to`, `workdir`, `cwd`), e blocca verbi di mutazione filesystem (`write`, `edit`, `patch`, `delete`, `remove`, `unlink`, `save_file`, `append_file`, ecc.).
 
-### 2. Scritture shell & Anti-Evasion (`shell` / `bash`)
+### 2. Ispezione Profonda Shell & Motore Anti-Offuscamento (`shell` / `bash`)
 
-Analizza ed elabora la command line scomponendo catene di comandi:
+Analizza ed elabora la command line scomponendo catene di comandi, subshell e pipeline:
 - Risolve e segue `cd` e `pushd` per determinare la cartella corrente effettiva;
-- Ispeziona ed entra ricorsivamente in script innestati: `$(...)`, backticks, subshell parentetiche `(...)`, `sh -c`, `bash -lc`, `eval`;
-- Neutralizza tecniche di evasione ed offuscamento comuni:
-  - Spacchettamento di flag ed opzioni per wrapper shell (`sudo -u user`, `env -i`, `nice -n`, `nohup`);
-  - Normalizzazione della variabile `$IFS` fuori dalle virgolette;
-  - Redirezioni speciali: redirezioni clobber (`>|`), output/error combinati (`&>`, `>&`) e `| tee`;
-  - Download mutanti: `curl -o target` / `curl --output`, `wget -O target` / `wget --output-document`;
-  - Utility di rimozione e VCS: `find -delete`, `git checkout -- <file>`, `git restore <file>`.
-
-Le letture passive (es. `grep` o `cat`) non sono bloccate per non interrompere il flusso di lavoro dello sviluppatore; il loro output viene filtrato e sanificato dal livello di mascheramento.
+- Ispeziona ed entra ricorsivamente in script innestati: `$(...)` bilanciati, backticks, subshell `(...)`, gruppi `{ ...; }`, process substitution `<(...)` e `>(...)`, `sh -c`, `bash -lc`, `eval`;
+- Neutralizza tecniche di evasione ed offuscamento avanzate:
+  - Decodifica stringhe ANSI-C (`$'\x2e\x65\x6e\x76'`, `$'\056env'`), quote splitting (`.e''nv`), sostituzioni comando (`$(echo .env)`, `$(printf '%s' .env)`) ed espansioni parametro (`.${empty}env`, `${unset:-.env}`);
+  - Tracciamento delle assegnazioni di variabili cross-segmento (`A=.e; B=nv; cat $A$B`, `export TARGET=...`);
+  - Spacchettamento di flag ed opzioni per wrapper shell (`sudo -u user`, `env -i`, `nice -n`, `timeout 5`, `nohup`, `xargs`);
+  - Normalizzazione della variabile `$IFS` / `${IFS}` fuori dalle virgolette;
+  - Blocco dell'esecuzione di payload codificati (`base64 -d | sh`, `xxd -r | bash`) e tracciamento pipeline `echo .env | xargs ...`;
+  - Redirezioni di scrittura (`>`, `>>`, `>|`, `&>`, `>&file`, `<>`) e di lettura (`< .env`), più `| tee` e `dd if=/of=`;
+  - Blocco di letture/esfiltrazioni su percorsi protetti (`cat`, `head`, `tail`, `base64`, `xxd`, `source`, `.`, `grep`, `rg`, `sed`, `awk`, `jq`, `find`, `git show HEAD:.env`, `git diff --no-index`, `tar`, `zip`, `openssl`, `scp`, `sftp`, `curl -d @.env`, `wget --post-file`) e one-liner di interpreti (`python -c`, `node -e`, `ruby -e`, `perl -e`);
+  - Blocco preventivo di segreti in chiaro inline nella riga di comando (`blockInlineSecretsInCommands: true`).
+  - Le ricerche nel codice sorgente (es. `grep -rn "\.env" src/`) e la lettura dei file di configurazione non-segreti (`~/.config/opencode/settings.json`) restano consentite.
 
 ### 3. Integrità del guardiano (Anti-Tampering)
 
