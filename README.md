@@ -45,7 +45,7 @@ Il plugin opera come **Defense in Depth** a livello applicativo nell'infrastrutt
 | **Manomissione Guard** | Blocco in scrittura su `~/.config/opencode/**`, `opencode.db` e cartella del plugin | Elevata a livello di tool e shell standard |
 
 > [!WARNING]
-> L'analisi dei comandi shell è lessicale. Binari non standard, interpreti ad alto livello (`python -c`, `node -e`) e chiamate di sistema native richiedono un isolamento OS a monte (sandbox o container). Il plugin è pensato per cooperare con le autorizzazioni native di OpenCode.
+> L'analisi dei comandi shell è lessicale. Sebbene i one-liner degli interpreti principali (`python -c`, `node -e`, `ruby -e`, `perl -e`) vengano ispezionati, binari custom compilati e chiamate di sistema native richiedono un isolamento OS a monte (sandbox o container). Il plugin è pensato per cooperare con le autorizzazioni native di OpenCode.
 
 ---
 
@@ -55,15 +55,15 @@ Il plugin opera come **Defense in Depth** a livello applicativo nell'infrastrutt
 
 Intercetta ogni chiamata a qualsiasi tool (inclusi server MCP e comandi di patch) prima dell'esecuzione. Blocca lettura e scrittura su:
 
-- File d'ambiente: `.env` e varianti (`.env.*`), preservando i template (`.env.example`, `.env.sample`, `.env.template`);
-- Credenziali utente e SSH: `~/.ssh/**`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.docker/config.json`, `~/.config/gh/hosts.yml`;
-- Cloud provider: `~/.aws/**`, `~/.azure/**`, `~/.gcloud/**`, `~/.kube/**`;
-- Crittografia e GPG: `~/.gnupg/**`, chiavi private `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`;
-- Shell profile: `~/.zshrc*`, `~/.bashrc*`, `~/.bash_profile`, `~/.profile`, `*rc.local`;
-- VCS hooks e config: `**/.git/config`, `**/.git/hooks/**`;
-- Database e auth OpenCode: `~/.config/opencode/auth.json`, `opencode.db`, `/etc/shadow`, `/etc/sudoers*`.
+- File d'ambiente: `.env`, `.env.*`, `*.env`, `.envrc`, preservando i template (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.default`, `.env.schema`);
+- Credenziali utente, package manager e SSH: `~/.ssh/**`, `/etc/ssh/**`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, `~/.gem/credentials`, `~/.cargo/credentials*`, `~/.composer/auth.json`, `~/.docker/config.json`, `~/.config/gh/**`, `~/.config/glab-cli/**`;
+- Cloud provider & Infrastructure as Code: `~/.aws/**`, `~/.config/gcloud/**`, `~/.gcloud/**`, `~/.gcp/**`, `~/.azure/**`, `~/.oci/**`, `~/.kube/**`, `~/.terraform.d/**`, `**/*.tfstate`, `**/*.tfstate.*`, `**/*.tfvars`, `~/.vault-token`;
+- Crittografia, Keyring e GPG: `~/.gnupg/**`, `~/.password-store/**`, `~/.local/share/keyrings/**`, `~/Library/Keychains/**`, `~/.config/op/**`, `~/.op/**`, `~/.config/sops/**`, `~/.config/age/**`, chiavi private `*.pem`, `*.key`, `*.pkcs12`, `*.pfx`, `*.p12`, `*.jks`, `*.keystore`, `*.age`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`;
+- Shell profile e history: `~/.zshrc*`, `~/.zprofile`, `~/.zshenv`, `~/.zsh_history`, `~/.bashrc*`, `~/.bash_profile`, `~/.bash_history`, `~/.profile`, `*rc.local`;
+- VCS e segreti di sistema: `**/.git/**`, `**/.git/config`, `**/.git/hooks/**`, `/etc/shadow*`, `/etc/gshadow*`, `/etc/sudoers*`;
+- Database e auth OpenCode: `~/.config/opencode/auth.json`, `~/.local/share/opencode/opencode.db*`.
 
-Riconosce automaticamente sia percorsi relativi che assoluti, parametri URI `file://`, parametri complessi (`path`, `filePath`, `source`, `destination`, `oldPath`, `newPath`, `from`, `to`, `workdir`, `cwd`), e blocca verbi di mutazione filesystem (`write`, `edit`, `patch`, `delete`, `remove`, `unlink`, `save_file`, `append_file`, ecc.).
+Riconosce automaticamente sia percorsi relativi che assoluti, parametri URI `file://`, parametri complessi (`path`, `filePath`, `source`, `destination`, `oldPath`, `newPath`, `from`, `to`, `workdir`, `cwd`), blocca verbi di mutazione filesystem (`write`, `edit`, `patch`, `delete`, `remove`, `unlink`, `save_file`, `append_file`, ecc.) e previene la scrittura di segreti in chiaro nei file sorgente (`content`, `newString`, `new_string`, `newText`, `replacement`, `patchText`, `edits`).
 
 ### 2. Ispezione Profonda Shell & Motore Anti-Offuscamento (`shell` / `bash`)
 
@@ -84,9 +84,10 @@ Analizza ed elabora la command line scomponendo catene di comandi, subshell e pi
 ### 3. Integrità del guardiano (Anti-Tampering)
 
 Scrittura, modifica e cancellazione sono rigorosamente vietate su:
-- `~/.config/opencode/**` (configurazioni, impostazioni e regole);
+- `~/.config/opencode/**` e `.opencode/**` (configurazioni globali e di progetto);
+- `**/opencode.json`, `**/opencode.jsonc` e `**/dlp-guard.json` (manifesti plugin e regole DLP);
 - `~/.local/share/opencode/**` (storage locale e database);
-- La directory stessa in cui è installato `opencode-dlp-guard`.
+- La directory stessa in cui è installato `opencode-dlp-guard` e i comandi CLI `opencode plugin remove/uninstall/disable`.
 
 ### 4. Mascheramento deterministico & Session Memory
 
@@ -94,16 +95,17 @@ Tool result ed intero contesto dei messaggi in uscita verso i provider LLM vengo
 
 - **Famiglie di token coperte nativamente**:
   - `[REDACTED_PRIVATE_KEY_#N]` (RSA, EC, DSA, OPENSSH, e blocchi PGP `PRIVATE KEY BLOCK`);
+  - `[REDACTED_AGE_SECRET_KEY_#N]` (`AGE-SECRET-KEY-1...`);
   - `[REDACTED_AWS_KEY_#N]` (`AKIA...`, `ASIA...`);
   - `[REDACTED_GITHUB_TOKEN_#N]` (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`);
   - `[REDACTED_GITLAB_TOKEN_#N]` (`glpat-...`);
   - `[REDACTED_HUGGINGFACE_TOKEN_#N]` (`hf_...`);
   - `[REDACTED_NPM_TOKEN_#N]` (`npm_...`);
-  - `[REDACTED_PYPI_TOKEN_#N]` (`pypi-AgEI...`);
+  - `[REDACTED_PYPI_TOKEN_#N]` (`pypi-...`);
   - `[REDACTED_SLACK_TOKEN_#N]` (`xoxb-`, `xoxp-`, ecc.);
-  - `[REDACTED_API_KEY_#N]` (OpenAI `sk-...`, Anthropic `sk-ant-...`, Google `AIza...`, Stripe `sk_live_`, ecc.);
+  - `[REDACTED_API_KEY_#N]` (OpenAI `sk-...`, Anthropic `sk-ant-...`, Google `AIza...`, Stripe `sk_live_`, SendGrid `SG....`, DigitalOcean `dop_v1_`, ecc.);
   - `[REDACTED_JWT_#N]` (JSON Web Token);
-  - `[REDACTED_URL_CREDENTIAL_#N]` (URL PostgreSQL, MySQL, MongoDB, Redis `redis://:pass@host`);
+  - `[REDACTED_URL_CREDENTIAL_#N]` (URL PostgreSQL, MySQL, MongoDB, Redis `redis://:<PASS>@host`);
   - `[REDACTED_SECRET_#N]` (coppie chiave/valore `.env`, YAML, JSON, shell export, distinguendo password letterali con `$` da variabili shell `$VAR`).
 - **Session Memory**: ogni segreto scoperto viene memorizzato nel redattore della sessione e mascherato immediatamente se riappare nudo in stack trace, messaggi d'errore o output successivi.
 - **Relazionale & Idempotente**: la medesima credenziale mantiene lo stesso identico identificativo nella sessione, consentendo al modello di ragionare sulle relazioni tra segreti senza esporne il valore. I placeholder `[REDACTED_...]` non vengono mai ri-mascherati.
@@ -132,45 +134,90 @@ Il file di configurazione predefinito è allocato in:
 
 ```json
 {
+  "enabled": true,
   "protectedPaths": [
     ".env",
     ".env.*",
+    "*.env",
+    ".envrc",
+    "**/.git/**",
     "**/.git/config",
     "**/.git/hooks/**",
     "~/.ssh/**",
+    "/etc/ssh/**",
+    "/etc/shadow*",
+    "/etc/gshadow*",
+    "/etc/sudoers*",
     "~/.aws/**",
+    "~/.config/gcloud/**",
+    "~/.gcloud/**",
+    "~/.gcp/**",
+    "~/.azure/**",
+    "~/.oci/**",
     "~/.gnupg/**",
+    "~/.password-store/**",
+    "~/.local/share/keyrings/**",
+    "~/Library/Keychains/**",
+    "~/.config/gh/**",
+    "~/.config/gh/hosts.yml",
+    "~/.config/glab-cli/**",
+    "~/.config/op/**",
+    "~/.op/**",
+    "~/.config/sops/**",
+    "~/.config/age/**",
     "~/.kube/**",
+    "~/.docker/config.json",
+    "~/.terraform.d/**",
+    "**/*.tfstate",
+    "**/*.tfstate.*",
+    "**/*.tfvars",
+    "~/.vault-token",
     "~/.netrc",
+    "~/.git-credentials",
     "~/.npmrc",
     "~/.pypirc",
-    "~/.docker/config.json",
-    "~/.config/gh/hosts.yml",
-    "~/.azure/**",
-    "~/.gcloud/**",
+    "~/.gem/credentials",
+    "~/.cargo/credentials*",
+    "~/.composer/auth.json",
     "~/.zshrc*",
+    "~/.zprofile",
+    "~/.zshenv",
+    "~/.zsh_history",
     "~/.bashrc*",
     "~/.bash_profile",
+    "~/.bash_history",
     "~/.profile",
     "**/*rc.local",
     "**/*.pem",
     "**/*.key",
+    "**/*.pkcs12",
+    "**/*.pfx",
+    "**/*.p12",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/*.age",
     "**/id_rsa*",
     "**/id_ed25519*",
     "**/id_ecdsa*",
+    "**/id_dsa*",
     "~/.config/opencode/auth.json",
     "~/.local/share/opencode/opencode.db",
-    "~/.local/share/opencode/opencode.db-*",
-    "/etc/shadow",
-    "/etc/sudoers*"
+    "~/.local/share/opencode/opencode.db-*"
   ],
   "integrityPaths": [
     "~/.config/opencode/**",
-    "~/.local/share/opencode/**"
+    "~/.local/share/opencode/**",
+    ".opencode/**",
+    "**/opencode.json",
+    "**/opencode.jsonc",
+    "**/dlp-guard.json"
   ],
   "enableGitleaks": true,
   "gitleaksMinBytes": 4096,
-  "gitleaksTimeoutMs": 500
+  "gitleaksTimeoutMs": 500,
+  "blockInlineSecretsInCommands": true,
+  "blockReaderCommandsOnProtected": true,
+  "blockWriteSecrets": true
 }
 ```
 

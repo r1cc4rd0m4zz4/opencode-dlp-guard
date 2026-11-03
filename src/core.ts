@@ -100,20 +100,13 @@ export const DEFAULT_CONFIG: DlpGuardConfig = {
     "~/.config/opencode/auth.json",
     "~/.local/share/opencode/opencode.db",
     "~/.local/share/opencode/opencode.db-*",
-    "~/.pi/agent/auth.json",
-    "~/.claude/.credentials.json",
   ],
   integrityPaths: [
     "~/.config/opencode/**",
     "~/.local/share/opencode/**",
     ".opencode/**",
-    "~/.pi/agent/**",
-    "**/.pi/agent/**",
-    ".pi/**",
-    "~/.gemini/config/**",
-    "**/.gemini/config/**",
-    ".agents/**",
-    ".agent/**",
+    "**/opencode.json",
+    "**/opencode.jsonc",
     "**/dlp-guard.json",
   ],
   enableGitleaks: true,
@@ -980,16 +973,11 @@ export function checkBashCommand(
     const { cmdName, args: rawArgs, usedXargs } = unwrapWords(expanded)
     const args = usedXargs && pipedArgs.length ? [...rawArgs, ...pipedArgs] : rawArgs
 
-    if (cmdName === "agy-dlp" || cmdName === "agy-dlp-guard" || words.some((w) => /agy-dlp(?:-guard)?(?:\.mjs)?$/.test(w))) {
-      const tIdx = args.findIndex((a) => /^toggle$/i.test(a))
-      if (
-        args.some((a) => /^(?:uninstall|off|disable)$/i.test(a)) ||
-        (tIdx !== -1 && /^(?:off|false|0|disable)$/i.test(args[tIdx + 1] || ""))
-      ) {
-        return deny(cmdName || "agy-dlp", "guard integrity: disabling DLP Guard is not allowed")
-      }
-    }
-    if ((cmdName === "opencode" || cmdName === "pi") && args.some((a) => /^(?:uninstall|remove|disable)$/i.test(a)) && args.some((a) => /dlp-guard/i.test(a))) {
+    if (
+      cmdName === "opencode" &&
+      args.some((a) => /^(?:uninstall|remove|disable)$/i.test(a)) &&
+      args.some((a) => /dlp-guard/i.test(a))
+    ) {
       return deny(cmdName, "guard integrity: removing DLP Guard is not allowed")
     }
 
@@ -1385,15 +1373,14 @@ function patchPaths(input: Record<string, unknown>): string[] {
 
 function extractWriteTexts(input: Record<string, unknown>): string {
   const chunks: string[] = []
-  for (const k of ["content", "Content", "replacement", "Replacement", "replacementContent", "ReplacementContent", "newText", "new_str", "patchText", "patch"]) {
+  for (const k of ["content", "newString", "new_string", "newText", "new_str", "replacement", "patchText", "patch"]) {
     if (typeof input[k] === "string" && input[k]) chunks.push(input[k] as string)
   }
-  const list = input.edits || input.Edits || input.replacementChunks || input.ReplacementChunks
-  if (Array.isArray(list)) {
-    for (const item of list) {
+  if (Array.isArray(input.edits)) {
+    for (const item of input.edits) {
       if (item && typeof item === "object") {
         const rec = item as Record<string, unknown>
-        const txt = rec.newText || rec.new_str || rec.replacement || rec.Replacement || rec.replacementContent || rec.ReplacementContent || rec.content || ""
+        const txt = rec.newString || rec.new_string || rec.newText || rec.new_str || rec.replacement || rec.content || ""
         if (typeof txt === "string" && txt) chunks.push(txt)
       }
     }
@@ -1433,11 +1420,9 @@ export function scanToolCall(
     const command =
       typeof data.command === "string"
         ? data.command
-        : typeof data.CommandLine === "string"
-          ? data.CommandLine
-          : typeof data.cmd === "string"
-            ? data.cmd
-            : ""
+        : typeof data.cmd === "string"
+          ? data.cmd
+          : ""
     return checkBashCommand(command, config, workdir)
   }
 

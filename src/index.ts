@@ -57,8 +57,11 @@ export default Plugin.define({
     ensureConfigFile()
 
     let config = loadConfig()
-    const disabled = new Set<string>()
+    const sessionOverrides = new Map<string, boolean>()
     const redactors = new Map<string, SecretRedactor>()
+
+    const isEnabled = (sessionID: string): boolean =>
+      sessionOverrides.get(sessionID) ?? (config.enabled !== false)
 
     const redactorFor = (sessionID: string): SecretRedactor => {
       let redactor = redactors.get(sessionID)
@@ -76,7 +79,7 @@ export default Plugin.define({
     }
 
     await ctx.tool.hook("execute.before", (event) => {
-      if (disabled.has(event.sessionID)) return
+      if (!isEnabled(event.sessionID)) return
       const check = scanToolCall(event.tool, event.input, config, ctx.location.directory)
       if (!check.block) return
       console.warn(`[dlp-guard] blocked ${event.tool}: ${check.reason}`)
@@ -84,7 +87,7 @@ export default Plugin.define({
     })
 
     await ctx.tool.hook("execute.after", (event) => {
-      if (disabled.has(event.sessionID)) return
+      if (!isEnabled(event.sessionID)) return
       const redactor = redactorFor(event.sessionID)
 
       if (event.status === "error") {
@@ -125,7 +128,7 @@ export default Plugin.define({
     })
 
     await ctx.session.hook("context", (event) => {
-      if (disabled.has(event.sessionID)) return
+      if (!isEnabled(event.sessionID)) return
       const redactor = redactorFor(event.sessionID)
       for (const part of event.system) {
         const next = redactor.redact(part.text)
@@ -145,16 +148,16 @@ export default Plugin.define({
           let text: string
 
           if (arg === "off") {
-            disabled.add(sessionID)
+            sessionOverrides.set(sessionID, false)
             text = statusText(false, config, redactor.size)
           } else if (arg === "on") {
-            disabled.delete(sessionID)
+            sessionOverrides.set(sessionID, true)
             text = statusText(true, config, redactor.size)
           } else if (arg === "reload") {
             const next = reload()
-            text = `[DLP Guard] config reloaded\n${statusText(!disabled.has(sessionID), next, redactor.size)}`
+            text = `[DLP Guard] config reloaded\n${statusText(isEnabled(sessionID), next, redactor.size)}`
           } else if (arg === "" || arg === "status") {
-            text = statusText(!disabled.has(sessionID), config, redactor.size)
+            text = statusText(isEnabled(sessionID), config, redactor.size)
           } else {
             text = HELP
           }
