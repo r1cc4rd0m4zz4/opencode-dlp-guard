@@ -165,7 +165,7 @@ export default Plugin.define({
           await ctx.session.synthetic({
             sessionID,
             text,
-            description: text.split("\n")[0],
+            description: text.replace(/\n+/g, " | "),
             resume: false,
           })
         },

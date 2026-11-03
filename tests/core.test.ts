@@ -629,6 +629,7 @@ test("plugin lifecycle: hooks, session commands (/dlp on|off|reload|status) and 
   // 5. /dlp status works both with "status" (stripped by OpenCode TUI) and "/dlp status"
   await dlpCmd.execute({ sessionID: "s1", prompt: { text: "status" } })
   assert.match(synthetics.at(-1)!.text, /\[DLP Guard\] ACTIVE/)
+  assert.match(synthetics.at(-1)!.description ?? "", /\[DLP Guard\] ACTIVE \| gitleaks:/)
   assert.equal(synthetics.at(-1)!.resume, false)
 
   // 6. /dlp reload respects config.enabled = false for sessions without explicit override
