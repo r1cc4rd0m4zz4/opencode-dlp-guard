@@ -379,27 +379,44 @@ export class SecretRedactor {
   }
 }
 
-let gitleaksAvailable: boolean | null = null
+let gitleaksMode: "stdin" | "detect-pipe" | false | null = null
 
-export function hasGitleaks(): boolean {
-  if (gitleaksAvailable === null) {
-    try {
-      gitleaksAvailable = cp.spawnSync("gitleaks", ["version"], { timeout: 500, stdio: "ignore" }).status === 0
-    } catch {
-      gitleaksAvailable = false
-    }
-  }
-  return gitleaksAvailable
+export function parseGitleaksMode(versionOutput: string): "stdin" | "detect-pipe" | false {
+  const m = versionOutput.trim().match(/v?(\d+)\.(\d+)\.(\d+)/)
+  if (!m) return false
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  if (major > 8 || (major === 8 && minor >= 19)) return "stdin"
+  if (major === 8) return "detect-pipe"
+  return false
 }
 
-export function scanWithGitleaks(text: string, timeoutMs = 500): string[] {
-  if (!hasGitleaks()) return []
+export function hasGitleaks(): boolean {
+  if (gitleaksMode === null) {
+    try {
+      const res = cp.spawnSync("gitleaks", ["version"], { timeout: 500, encoding: "utf-8" })
+      gitleaksMode = res.status === 0 ? parseGitleaksMode(`${res.stdout ?? ""}\n${res.stderr ?? ""}`) : false
+    } catch {
+      gitleaksMode = false
+    }
+  }
+  return gitleaksMode !== false
+}
+
+export function scanWithGitleaks(text: string, timeoutMs = 500, modeOverride?: "stdin" | "detect-pipe"): string[] {
+  if (!modeOverride && !hasGitleaks()) return []
+  const mode = modeOverride ?? (gitleaksMode || "stdin")
+  const args =
+    mode === "detect-pipe"
+      ? ["detect", "--pipe", "--no-banner", "--log-level", "error", "--report-format", "json", "--report-path", "-"]
+      : ["stdin", "--no-banner", "--log-level", "error", "--report-format", "json", "--report-path", "-"]
   try {
-    const result = cp.spawnSync(
-      "gitleaks",
-      ["stdin", "--no-banner", "--log-level", "error", "--report-format", "json", "--report-path", "-"],
-      { input: text, timeout: timeoutMs, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 },
-    )
+    const result = cp.spawnSync("gitleaks", args, {
+      input: text,
+      timeout: timeoutMs,
+      encoding: "utf-8",
+      maxBuffer: 10 * 1024 * 1024,
+    })
     const found = JSON.parse(result.stdout || "[]") as unknown
     if (!Array.isArray(found)) return []
     return found

@@ -533,12 +533,23 @@ test("gitleaks: safety net catches formats the regexes do not know (large buffer
   const secret = ["sq0", "atp-", "1234567890abcdef123456"].join("")
   const big = `${"x".repeat(5000)}\nsee ${secret}\n`
   assert.ok(core.scanWithGitleaks(`see ${secret}\n`).length > 0)
+  assert.ok(core.scanWithGitleaks(`see ${secret}\n`, 500, "detect-pipe").length > 0)
 
   const regexOnly = new core.SecretRedactor(C)
   assert.ok(regexOnly.redact(big, false).includes(secret), "context path is regex-only by design")
 
   const withGitleaks = new core.SecretRedactor(C)
   assert.ok(!withGitleaks.redact(big, true).includes(secret), "tool result path must redact")
+})
+
+test("gitleaks: version parser selects stdin for >=8.19 and detect-pipe for 8.0-8.18", () => {
+  assert.equal(core.parseGitleaksMode("8.30.1\n"), "stdin")
+  assert.equal(core.parseGitleaksMode("v8.19.0"), "stdin")
+  assert.equal(core.parseGitleaksMode("9.0.0"), "stdin")
+  assert.equal(core.parseGitleaksMode("8.18.2\n"), "detect-pipe")
+  assert.equal(core.parseGitleaksMode("v8.15.0"), "detect-pipe")
+  assert.equal(core.parseGitleaksMode("7.6.1"), false)
+  assert.equal(core.parseGitleaksMode("invalid"), false)
 })
 
 test("gitleaks: regexes keep working when gitleaks is disabled", () => {

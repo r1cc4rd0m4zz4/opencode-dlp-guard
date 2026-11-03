@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        node-version: [20, 22]
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +30,15 @@ jobs:
       - name: Install gitleaks (Linux)
         if: runner.os == 'Linux'
         run: |
-          GITLEAKS_VERSION="8.18.2"
+          GITLEAKS_VERSION="8.30.1"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Install gitleaks (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          GITLEAKS_VERSION="8.30.1"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
       - name: Install dependencies
