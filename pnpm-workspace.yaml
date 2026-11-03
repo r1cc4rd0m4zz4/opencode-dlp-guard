@@ -1,1 +1,5 @@
 verifyDepsBeforeRun: false
+overrides:
+  glob: ">=14.0.2"
+  minimatch: ">=11.0.1"
+
