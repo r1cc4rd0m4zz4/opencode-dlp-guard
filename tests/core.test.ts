@@ -533,7 +533,7 @@ test("gitleaks: safety net catches formats the regexes do not know (large buffer
   const secret = ["sq0", "atp-", "1234567890abcdef123456"].join("")
   const big = `${"x".repeat(5000)}\nsee ${secret}\n`
   assert.ok(core.scanWithGitleaks(`see ${secret}\n`).length > 0)
-  assert.ok(core.scanWithGitleaks(`see ${secret}\n`, 500, "detect-pipe").length > 0)
+  assert.ok(core.scanWithGitleaks(`see ${secret}\n`, 2000, "detect-pipe").length > 0)
 
   const regexOnly = new core.SecretRedactor(C)
   assert.ok(regexOnly.redact(big, false).includes(secret), "context path is regex-only by design")

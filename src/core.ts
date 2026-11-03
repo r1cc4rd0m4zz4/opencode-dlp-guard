@@ -111,7 +111,7 @@ export const DEFAULT_CONFIG: DlpGuardConfig = {
   ],
   enableGitleaks: true,
   gitleaksMinBytes: 4096,
-  gitleaksTimeoutMs: 500,
+  gitleaksTimeoutMs: 2000,
   blockInlineSecretsInCommands: true,
   blockReaderCommandsOnProtected: true,
   blockWriteSecrets: true,
@@ -394,7 +394,7 @@ export function parseGitleaksMode(versionOutput: string): "stdin" | "detect-pipe
 export function hasGitleaks(): boolean {
   if (gitleaksMode === null) {
     try {
-      const res = cp.spawnSync("gitleaks", ["version"], { timeout: 500, encoding: "utf-8" })
+      const res = cp.spawnSync("gitleaks", ["version"], { timeout: 2000, encoding: "utf-8" })
       gitleaksMode = res.status === 0 ? parseGitleaksMode(`${res.stdout ?? ""}\n${res.stderr ?? ""}`) : false
     } catch {
       gitleaksMode = false
@@ -403,7 +403,7 @@ export function hasGitleaks(): boolean {
   return gitleaksMode !== false
 }
 
-export function scanWithGitleaks(text: string, timeoutMs = 500, modeOverride?: "stdin" | "detect-pipe"): string[] {
+export function scanWithGitleaks(text: string, timeoutMs = 2000, modeOverride?: "stdin" | "detect-pipe"): string[] {
   if (!modeOverride && !hasGitleaks()) return []
   const mode = modeOverride ?? (gitleaksMode || "stdin")
   const args =
