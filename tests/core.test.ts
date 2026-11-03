@@ -554,7 +554,7 @@ test("plugin lifecycle: hooks, session commands (/dlp on|off|reload|status) and 
   const toolHooks = new Map<string, (event: Record<string, unknown>) => void>()
   const sessionHooks = new Map<string, (event: Record<string, unknown>) => void>()
   const commands = new Map<string, { execute: (arg: { sessionID: string; prompt: { text: string } }) => Promise<void> }>()
-  const synthetics: { sessionID: string; text: string }[] = []
+  const synthetics: { sessionID: string; text: string; description?: string; resume?: boolean }[] = []
 
   await plugin.setup({
     location: { directory: cwd },
@@ -567,7 +567,7 @@ test("plugin lifecycle: hooks, session commands (/dlp on|off|reload|status) and 
       hook: async (name: string, fn: (event: Record<string, unknown>) => void) => {
         sessionHooks.set(name, fn)
       },
-      synthetic: async (msg: { sessionID: string; text: string }) => {
+      synthetic: async (msg: { sessionID: string; text: string; description?: string; resume?: boolean }) => {
         synthetics.push(msg)
       },
     },
@@ -615,18 +615,26 @@ test("plugin lifecycle: hooks, session commands (/dlp on|off|reload|status) and 
   onContext(ctxEvt)
   assert.match(ctxEvt.system[0].text, /\[REDACTED_AWS_KEY_#1\]/)
 
-  // 4. /dlp off disables protection for session s1, /dlp on re-enables it
-  await dlpCmd.execute({ sessionID: "s1", prompt: { text: "/dlp off" } })
+  // 4. /dlp off disables protection for session s1, /dlp on re-enables it (with resume: false so LLM loop doesn't run)
+  await dlpCmd.execute({ sessionID: "s1", prompt: { text: "off" } })
   assert.match(synthetics.at(-1)!.text, /DISABLED/)
+  assert.equal(synthetics.at(-1)!.resume, false)
   assert.doesNotThrow(() => before({ sessionID: "s1", tool: "read", input: { path: ".env" } }))
 
   await dlpCmd.execute({ sessionID: "s1", prompt: { text: "/dlp on" } })
   assert.match(synthetics.at(-1)!.text, /ACTIVE/)
+  assert.equal(synthetics.at(-1)!.resume, false)
   assert.throws(() => before({ sessionID: "s1", tool: "read", input: { path: ".env" } }), /\[DLP Guard\]/)
 
-  // 5. /dlp reload respects config.enabled = false for sessions without explicit override
+  // 5. /dlp status works both with "status" (stripped by OpenCode TUI) and "/dlp status"
+  await dlpCmd.execute({ sessionID: "s1", prompt: { text: "status" } })
+  assert.match(synthetics.at(-1)!.text, /\[DLP Guard\] ACTIVE/)
+  assert.equal(synthetics.at(-1)!.resume, false)
+
+  // 6. /dlp reload respects config.enabled = false for sessions without explicit override
   fs.writeFileSync(core.configFilePath(), JSON.stringify({ ...C, enabled: false }))
-  await dlpCmd.execute({ sessionID: "s2", prompt: { text: "/dlp reload" } })
+  await dlpCmd.execute({ sessionID: "s2", prompt: { text: "reload" } })
   assert.match(synthetics.at(-1)!.text, /DISABLED/)
+  assert.equal(synthetics.at(-1)!.resume, false)
   assert.doesNotThrow(() => before({ sessionID: "s2", tool: "read", input: { path: ".env" } }))
 })

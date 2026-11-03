@@ -143,7 +143,7 @@ export default Plugin.define({
         description: "DLP Guard: /dlp [status|on|off|reload]",
         execute: async ({ sessionID, prompt }) => {
           const raw = (prompt.text ?? "").trim()
-          const arg = raw.replace(/^\/dlp\b/i, "").trim().toLowerCase()
+          const arg = raw.replace(/^\/?dlp\b/i, "").trim().toLowerCase()
           const redactor = redactorFor(sessionID)
           let text: string
 
@@ -162,7 +162,12 @@ export default Plugin.define({
             text = HELP
           }
 
-          await ctx.session.synthetic({ sessionID, text })
+          await ctx.session.synthetic({
+            sessionID,
+            text,
+            description: text.split("\n")[0],
+            resume: false,
+          })
         },
       })
     })
