@@ -4,10 +4,10 @@
 
 [![CI](https://github.com/r1cc4rd0m4zz4/opencode-dlp-guard/actions/workflows/test.yml/badge.svg)](https://github.com/r1cc4rd0m4zz4/opencode-dlp-guard/actions/workflows/test.yml)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](package.json)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](package.json)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.6.0-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Plugin di sicurezza zero-dependency per **OpenCode V2**, evoluzione architetturale del modulo DLP creato originariamente per il Pi Coding Agent ([`pi-dlp-guard`](https://github.com/r1cc4rd0m4zz4/pi-dlp-guard)). 
+Plugin di sicurezza zero-dependency per **OpenCode V2**, progettato per proteggere agenti di sviluppo autonomi e flussi di pair programming. 
 
 Previene l'esfiltrazione accidentale di chiavi di cifratura, credenziali cloud, token di autenticazione e file sensibili verso i modelli di linguaggio, proteggendo al contempo l'integrità del sistema di configurazione dell'agente contro manomissioni o attacchi di prompt injection.
 
@@ -107,9 +107,10 @@ Tool result ed intero contesto dei messaggi in uscita verso i provider LLM vengo
   - `[REDACTED_JWT_#N]` (JSON Web Token);
   - `[REDACTED_URL_CREDENTIAL_#N]` (URL PostgreSQL, MySQL, MongoDB, Redis `redis://:<PASS>@host`);
   - `[REDACTED_SECRET_#N]` (coppie chiave/valore `.env`, YAML, JSON, shell export, distinguendo password letterali con `$` da variabili shell `$VAR`).
+- **Zero Falsi Positivi su JSON, AST e Decision Engines**: differenzia chirurgicamente le assegnazioni di credenziali effettive (`API_KEY`, `PASSWORD`, `SECRET`) dalle proprietà di schema innocue (`key`, `decision_key`, `token_type`, `auth_method`, `pass_rate`) e riconosce identificatori semantici in linguaggio naturale (es. payload generati da modelli decisionali strutturati come `convaiinnovations/laya-typed-decisions`).
 - **Session Memory**: ogni segreto scoperto viene memorizzato nel redattore della sessione e mascherato immediatamente se riappare nudo in stack trace, messaggi d'errore o output successivi.
 - **Relazionale & Idempotente**: la medesima credenziale mantiene lo stesso identico identificativo nella sessione, consentendo al modello di ragionare sulle relazioni tra segreti senza esporne il valore. I placeholder `[REDACTED_...]` non vengono mai ri-mascherati.
-- **Gitleaks Safety-Net**: se installato in PATH, `gitleaks` viene invocato come fallback di sicurezza per buffer di output superiori alla soglia (default 4 KB).
+- **Gitleaks Dual-Mode Safety-Net**: se installato in PATH, `gitleaks` viene invocato come fallback di sicurezza per buffer di output superiori alla soglia (default 4 KB). Supporta nativamente `gitleaks stdin` (v8.19.0+) con fallback automatico a `detect --pipe` per le versioni distro legacy (8.0–8.18).
 
 ---
 
@@ -214,7 +215,7 @@ Il file di configurazione predefinito è allocato in:
   ],
   "enableGitleaks": true,
   "gitleaksMinBytes": 4096,
-  "gitleaksTimeoutMs": 500,
+  "gitleaksTimeoutMs": 2000,
   "blockInlineSecretsInCommands": true,
   "blockReaderCommandsOnProtected": true,
   "blockWriteSecrets": true
@@ -225,7 +226,7 @@ Il file di configurazione predefinito è allocato in:
 
 ## Test & Verifica
 
-La suite di test integrata copre oltre 35 scenari di sicurezza (symlink, dangling links, traversals, shell evasions, wrappers, quote splitting, tokens, false positives, session memory e gitleaks):
+La suite di test integrata copre 40 scenari di sicurezza (symlink, dangling links, traversals, shell evasions, wrappers, quote splitting, tokens, false positives su decision engines/AST, session memory e gitleaks):
 
 ```sh
 pnpm install
