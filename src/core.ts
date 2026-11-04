@@ -182,8 +182,6 @@ export function ensureConfigFile(file: string = configFilePath(), config: DlpGua
 // Secret Detection & Relational Redaction
 // -----------------------------------------------------------------------------
 
-const SEC_WORDS = "SECRET|KEY|TOKEN|PASSWORD|PASSWD|PASS|PW|AUTH|PRIVATE|CREDENTIAL"
-
 const RULES: { category: string; rx: RegExp }[] = [
   {
     category: "PRIVATE_KEY",
@@ -206,7 +204,7 @@ const RULES: { category: string; rx: RegExp }[] = [
   {
     category: "SECRET",
     rx: new RegExp(
-      `(?:^|[\\s;,{("'])(?:export\\s+)?(?:[A-Za-z0-9]+[_-])*(?:${SEC_WORDS})(?:[_-][A-Za-z0-9]+)*["']?\\s*[=:]\\s*(?:"([^"\\r\\n]{8,})"|'([^'\\r\\n]{8,})'|([A-Za-z0-9_~%+=-]{8,})(?![A-Za-z0-9_~%+=-]|[.(]))`,
+      `(?:^|[\\s;,{("'])(?:export\\s+)?([A-Za-z0-9_-]+)["']?\\s*[=:]\\s*(?:"([^"\\r\\n]{8,})"|'([^'\\r\\n]{8,})'|([A-Za-z0-9_~%+=-]{8,})(?![A-Za-z0-9_~%+=-]|[.(]))`,
       "gi",
     ),
   },
@@ -227,16 +225,188 @@ const BENIGN_SET = new Set([
   "password",
   "secret",
   "token",
+  "choice",
+  "score",
+  "noul",
+  "string",
+  "number",
+  "boolean",
+  "integer",
+  "array",
+  "object",
 ])
+
+const NON_SECRET_KEY_SUFFIXES = new Set([
+  "type",
+  "types",
+  "method",
+  "methods",
+  "mode",
+  "modes",
+  "provider",
+  "providers",
+  "status",
+  "flow",
+  "required",
+  "check",
+  "scope",
+  "scheme",
+  "name",
+  "names",
+  "id",
+  "ids",
+  "path",
+  "paths",
+  "url",
+  "urls",
+  "uri",
+  "uris",
+  "file",
+  "files",
+  "dir",
+  "dirs",
+  "count",
+  "counts",
+  "total",
+  "totals",
+  "length",
+  "size",
+  "limit",
+  "rate",
+  "score",
+  "scores",
+  "choice",
+  "choices",
+  "category",
+  "categories",
+  "label",
+  "labels",
+  "result",
+  "results",
+  "index",
+  "indices",
+  "list",
+  "field",
+  "fields",
+  "schema",
+  "prompt",
+  "instruction",
+  "instructions",
+  "criteria",
+])
+
+const NON_SECRET_EXACT_KEYS = new Set([
+  "key",
+  "keys",
+  "pass",
+  "auth",
+  "private",
+  "public",
+  "primary_key",
+  "foreign_key",
+  "sort_key",
+  "routing_key",
+  "cache_key",
+  "partition_key",
+  "composite_key",
+  "event_key",
+  "search_key",
+  "object_key",
+  "decision_key",
+  "type_key",
+  "translation_key",
+  "item_key",
+  "element_key",
+  "map_key",
+  "cluster_key",
+  "typed_key",
+  "tokenizer_token",
+  "nlp_token",
+  "ast_token",
+  "lexical_token",
+  "cancellation_token",
+  "test_pass",
+  "compiler_pass",
+  "render_pass",
+  "multi_pass",
+  "private_method",
+  "private_field",
+  "private_property",
+  "private_repo",
+  "private_route",
+])
+
+const SENSITIVE_KEY_PATTERNS = [
+  /password|passwd|passphrase|passcode|\bpw\b/i,
+  /secret/i,
+  /credential/i,
+  /(?:api|secret|private|priv|access|signing|encryption|enc|master|ssh|auth|license|app|client|deploy)[_-]key/i,
+  /(?:auth|access|refresh|bearer|session|api|id|secret)[_-]token/i,
+  /\b(?:db|database|admin|root|user|redis|postgres|mysql|ftp|smtp)[_-]pass\b/i,
+]
+
+function isNaturalLanguageIdentifier(val: string): boolean {
+  return /^[a-z]+(?:[_-][a-z]+)*$/.test(val)
+}
 
 function isSafeOrPlaceholder(secret: string | undefined, quoteType?: "double" | "single" | "none"): boolean {
   if (!secret || typeof secret !== "string") return true
-  if (BENIGN_SET.has(secret.trim().toLowerCase())) return true
-  if (/^\[REDACTED_[A-Z_]+_#\d+\]$/.test(secret)) return true
-  if (/^(?:<[A-Za-z0-9_ -]+>|\([A-Za-z0-9_ -]+\)|\[[A-Za-z0-9_ -]+\]|\*+|\.+)$/.test(secret)) return true
+  const trimmed = secret.trim()
+  if (BENIGN_SET.has(trimmed.toLowerCase())) return true
+  if (/^\[REDACTED_[A-Z_]+_#\d+\]$/.test(trimmed)) return true
+  if (/^(?:<[A-Za-z0-9_ -]+>|\([A-Za-z0-9_ -]+\)|\[[A-Za-z0-9_ -]+\]|\*+|\.+)$/.test(trimmed)) return true
   // Single-quoted strings in shell/JSON are literal values, not variable expansions
   if (quoteType === "single") return false
-  if (/^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(secret)) return true
+  if (/^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(trimmed)) return true
+  return false
+}
+
+function isSensitiveSecretAssignment(
+  varName: string | undefined,
+  secret: string,
+  quoteType?: "double" | "single" | "none",
+): boolean {
+  if (!varName || isSafeOrPlaceholder(secret, quoteType)) return false
+  // Text with whitespace (sentences, descriptions) in assignments are natural language, not secrets
+  if (/\s/.test(secret.trim())) return false
+
+  const name = varName.trim().toLowerCase()
+  const rawName = varName.trim()
+
+  // 1. Non-secret exact keys (object properties, dictionary keys, test passes, AST tokens)
+  if (NON_SECRET_EXACT_KEYS.has(name)) {
+    // If it is bare 'token' or 'tokens', only treat as secret if value has digits/entropy (not natural language)
+    if ((name === "token" || name === "tokens") && !isNaturalLanguageIdentifier(secret)) {
+      return true
+    }
+    return false
+  }
+
+  // 2. Non-secret suffixes (metadata, types, counters, status, metrics, schema)
+  const lastUnderscore = name.lastIndexOf("_")
+  const lastHyphen = name.lastIndexOf("-")
+  const sepIndex = Math.max(lastUnderscore, lastHyphen)
+  if (sepIndex > 0) {
+    const suffix = name.slice(sepIndex + 1)
+    if (NON_SECRET_KEY_SUFFIXES.has(suffix)) return false
+  }
+
+  // 3. Natural language identifiers (snake_case/kebab-case words without digits or symbols)
+  // are never secrets unless the variable explicitly designates a password/passphrase
+  const isExplicitPassword = /password|passwd|passphrase|passcode|\bpw\b/i.test(name)
+  if (!isExplicitPassword && isNaturalLanguageIdentifier(secret)) {
+    return false
+  }
+
+  // 4. Must match a known sensitive credential variable pattern or uppercase TOKEN/SECRET
+  if (SENSITIVE_KEY_PATTERNS.some((rx) => rx.test(rawName))) {
+    return true
+  }
+
+  if (/^(?:TOKEN|SECRET|CREDENTIAL|API_KEY)$/.test(rawName)) {
+    return true
+  }
+
   return false
 }
 
@@ -253,25 +423,26 @@ export function detectSecrets(
       let captured: string | undefined
       let quoteType: "double" | "single" | "none" | undefined
       if (category === "SECRET") {
-        if (m[1]) {
-          captured = m[1]
-          quoteType = "double"
-        } else if (m[2]) {
+        const varName = m[1]
+        if (m[2]) {
           captured = m[2]
-          quoteType = "single"
+          quoteType = "double"
         } else if (m[3]) {
           captured = m[3]
+          quoteType = "single"
+        } else if (m[4]) {
+          captured = m[4]
           quoteType = "none"
         }
+        if (!captured || !isSensitiveSecretAssignment(varName, captured, quoteType)) continue
       } else {
         captured = m.slice(1, 4).find((g): g is string => typeof g === "string" && g.length > 0)
+        if (!captured || isSafeOrPlaceholder(captured, quoteType)) continue
       }
-      if (captured && !isSafeOrPlaceholder(captured, quoteType)) {
-        return {
-          category,
-          detected: captured,
-          sample: captured.length > 8 ? `${captured.slice(0, 4)}...${captured.slice(-4)}` : "[SECRET]",
-        }
+      return {
+        category,
+        detected: captured,
+        sample: captured.length > 8 ? `${captured.slice(0, 4)}...${captured.slice(-4)}` : "[SECRET]",
       }
     }
   }
@@ -345,21 +516,22 @@ export class SecretRedactor {
         let quoteType: "double" | "single" | "none" | undefined
 
         if (category === "SECRET") {
-          if (groups[0]) {
-            secret = groups[0]
-            quoteType = "double"
-          } else if (groups[1]) {
+          const varName = groups[0]
+          if (groups[1]) {
             secret = groups[1]
-            quoteType = "single"
+            quoteType = "double"
           } else if (groups[2]) {
             secret = groups[2]
+            quoteType = "single"
+          } else if (groups[3]) {
+            secret = groups[3]
             quoteType = "none"
           }
+          if (!secret || !isSensitiveSecretAssignment(varName, secret, quoteType)) return match
         } else {
           secret = groups.find((group): group is string => typeof group === "string" && group.length > 0)
+          if (!secret || isSafeOrPlaceholder(secret, quoteType)) return match
         }
-
-        if (!secret || isSafeOrPlaceholder(secret, quoteType)) return match
         const index = match.lastIndexOf(secret)
         const token = this.tokenFor(secret, category)
         return match.slice(0, index) + token + match.slice(index + secret.length)

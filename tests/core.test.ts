@@ -476,6 +476,26 @@ test("redaction: no false positives on benign code and JS expressions", () => {
   }
 })
 
+test("redaction: no false positives on typed-decisions and Laya model outputs", () => {
+  const redactor = new core.SecretRedactor(C)
+  const benignDecisions = [
+    '{"k' + 'ey": "incident_category", "type": "choice", "choice": "customer_support"}',
+    '{"k' + 'ey": "sentiment_analysis", "score": 0.95, "confidence": 0.98}',
+    '{"decision_k' + 'ey": "refund_evaluation", "choice": "approve_refund"}',
+    '{"auth_' + 'method": "single_sign_on", "auth_' + 'type": "bearer_token", "auth_' + 'status": "authenticated"}',
+    '{"tok' + 'en_type": "classification_token", "tok' + 'en": "classification", "tok' + 'en_count": 128}',
+    '{"pass_' + 'rate": "high_accuracy", "pass_' + 'count": 42}',
+    '{"private_' + 'method": "internal_evaluation", "private_' + 'scope": "local"}',
+    '{"answers": {"department": {"choice": "billing_department"}}}',
+    '{"questions": {"urgency": {"type": "score", "instructions": "Rate urgency", "criteria": ["low", "high"]}}}',
+    '{"model": "convaiinnovations/laya-typed-decisions", "prediction": "security_incident"}',
+  ]
+  for (const jsonText of benignDecisions) {
+    assert.equal(core.detectSecrets(jsonText, C, false), null, `FP on detectSecrets: ${jsonText}`)
+    assert.equal(redactor.redact(jsonText), jsonText, `FP on redact: ${jsonText}`)
+  }
+})
+
 test("redaction: tool result text parts and nested output", () => {
   const redactor = new core.SecretRedactor(C)
   const result: Record<string, unknown> = {

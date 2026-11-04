@@ -1,6 +1,6 @@
 {
   "name": "opencode-dlp-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-dependency DLP, path protection and secret redaction guard for OpenCode V2",
   "type": "module",
   "license": "MIT",
