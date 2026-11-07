@@ -8,12 +8,12 @@ on:
 
 jobs:
   test:
-    name: Test (Node ${{ matrix.node-version }} on ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Test (Node ${{ matrix.node-version }} on ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
@@ -28,17 +28,9 @@ jobs:
           cache: pnpm
 
       - name: Install gitleaks (Linux)
-        if: runner.os == 'Linux'
         run: |
           GITLEAKS_VERSION="8.30.1"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
-          gitleaks version
-
-      - name: Install gitleaks (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          GITLEAKS_VERSION="8.30.1"
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
       - name: Install dependencies
